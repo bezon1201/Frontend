@@ -1,17 +1,11 @@
-﻿# Frontend
 
-## Quick start
-```
-npm install
-npm run dev
-```
+  # Триэкранное приложение с свайпом
 
-## Data source mode
-- Settings → "MOC & API mode": переключение между MOCK и API, режим хранится в localStorage.
-- В API режиме проверяется `/health`; при успехе дополнительно грузится `/api/config/global` (display_currency/auto_refresh). При недоступности API показывается toast и режим откатывается в MOCK.
+  This is a code bundle for Триэкранное приложение с свайпом. The original project is available at https://www.figma.com/design/6OnqjxTG4GslGfFOhY46em/%D0%A2%D1%80%D0%B8%D1%8D%D0%BA%D1%80%D0%B0%D0%BD%D0%BD%D0%BE%D0%B5-%D0%BF%D1%80%D0%B8%D0%BB%D0%BE%D0%B6%D0%B5%D0%BD%D0%B8%D0%B5-%D1%81-%D1%81%D0%B2%D0%B0%D0%B9%D0%BF%D0%BE%D0%BC.
 
-## Dev server
-- Vite dev server на :3000, прокси `/api` и `/health` → `http://127.0.0.1:8000` для работы без CORS.
+  ## Running the code
 
-## Build
-- `npm run build` -> `./build`
+  Run `npm i` to install the dependencies.
+
+  Run `npm run dev` to start the development server.
+  

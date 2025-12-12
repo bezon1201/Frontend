@@ -1,4 +1,4 @@
-﻿import { useState } from "react";
+import { useState } from "react";
 import { X } from "lucide-react";
 import ModeBlock from "./settings/ModeBlock";
 import GlobalSettingsBlock from "./settings/GlobalSettingsBlock";

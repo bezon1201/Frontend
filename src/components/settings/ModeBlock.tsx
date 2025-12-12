@@ -1,8 +1,7 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner@2.0.3";
 import { useTheme } from "../../context/ThemeContext";
-import { DataSourceMode, useDataSource } from "../../context/DataSourceContext";
-import SegmentedControl from "../SegmentedControl";
+import { useDataSource } from "../../context/DataSourceContext";
 import { getGlobalConfig, GlobalConfigResponse, healthCheck } from "../../services/api";
 
 interface ModeBlockProps {
@@ -10,6 +9,7 @@ interface ModeBlockProps {
 }
 
 export default function ModeBlock({ onConfigLoaded }: ModeBlockProps) {
+  // Theme controls the visual indicator (green = API, red = MOCK)
   const { theme, toggleTheme } = useTheme();
   const { mode, setMode } = useDataSource();
   const [isCheckingApi, setIsCheckingApi] = useState(false);
@@ -47,25 +47,40 @@ export default function ModeBlock({ onConfigLoaded }: ModeBlockProps) {
       const cfg = await getGlobalConfig();
       setMode("API");
       applyBackendConfig(cfg);
+      return true;
     } catch {
       setMode("MOCK");
       if (showToastOnFailure) {
-        toast.error("API is not available — switched to MOCK");
+        toast.error("API is not available - switched to MOCK");
       }
+      return false;
     } finally {
       setIsCheckingApi(false);
     }
   };
 
-  const handleModeChange = async (nextMode: DataSourceMode) => {
-    if (nextMode === mode) return;
-    if (nextMode === "MOCK") {
+  // Handle toggle click - switch between API (green) and MOCK (red)
+  const handleToggleClick = async () => {
+    if (isCheckingApi) return;
+
+    // Current state: green = API, red = MOCK
+    const isCurrentlyApi = theme === "green";
+
+    if (isCurrentlyApi) {
+      // Switching to MOCK (red)
       setMode("MOCK");
-      return;
+      toggleTheme(); // API -> MOCK
+    } else {
+      // Switching to API (green)
+      const success = await checkApiAndLoad(true);
+      if (success) {
+        toggleTheme(); // MOCK -> API
+      }
+      // If failed, stays red (MOCK)
     }
-    await checkApiAndLoad(true);
   };
 
+  // On mount, check if mode is API and validate
   useEffect(() => {
     if (mode === "API") {
       void checkApiAndLoad(true);
@@ -75,14 +90,22 @@ export default function ModeBlock({ onConfigLoaded }: ModeBlockProps) {
 
   return (
     <div className="bg-white rounded-2xl p-6 mb-6">
-      <div className="flex items-center justify-between mb-6">
-        <h2 style={{ fontSize: "20px", fontWeight: "bold" }}>MOC & API mode</h2>
-        <button onClick={toggleTheme} className="relative inline-block w-14 h-8">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h2 style={{ fontSize: "20px", fontWeight: "bold" }}>Data Source Mode</h2>
+          <div className="text-gray-500 mt-1" style={{ fontSize: "14px" }}>
+            {theme === "green" ? "API Mode (Live Data)" : "MOCK Mode (Test Data)"}
+          </div>
+        </div>
+
+        {/* Toggle: Green = API, Red = MOCK */}
+        <button onClick={handleToggleClick} className="relative inline-block w-14 h-8" disabled={isCheckingApi}>
           <div
             className="rounded-full w-full h-full flex items-center px-1 transition-all"
             style={{
               backgroundColor: theme === "green" ? "#10b981" : "#ef4444",
               justifyContent: theme === "green" ? "flex-end" : "flex-start",
+              opacity: isCheckingApi ? 0.5 : 1,
             }}
           >
             <div className="w-6 h-6 bg-white rounded-full transition-all" />
@@ -90,22 +113,11 @@ export default function ModeBlock({ onConfigLoaded }: ModeBlockProps) {
         </button>
       </div>
 
-      <div className="space-y-2">
-        <div className="text-gray-600" style={{ fontSize: "16px" }}>
-          Data source
+      {isCheckingApi && (
+        <div className="text-gray-400 text-center" style={{ fontSize: "14px" }}>
+          Checking API availability...
         </div>
-        <SegmentedControl
-          options={["MOCK", "API"]}
-          value={mode}
-          onChange={(val) => handleModeChange(val as DataSourceMode)}
-          disabled={isCheckingApi}
-        />
-        {isCheckingApi && (
-          <div className="text-gray-400" style={{ fontSize: "14px" }}>
-            Checking API availability...
-          </div>
-        )}
-      </div>
+      )}
     </div>
   );
 }

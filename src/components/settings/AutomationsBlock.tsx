@@ -396,7 +396,7 @@ export default function AutomationsBlock() {
 
       {cronJobs.length === 0 && (
         <div className="text-center pt-4 pb-8" style={{ fontSize: "16px", color: "#9CA3AF" }}>
-          No automations yet ˘?" tap + to create one
+          No automations yet — tap + to create one
         </div>
       )}
 

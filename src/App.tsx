@@ -225,11 +225,11 @@ function AppContent() {
 
 export default function App() {
   return (
-    <DataSourceProvider>
-      <ThemeProvider>
+    <ThemeProvider>
+      <DataSourceProvider>
         <AppContent />
-      </ThemeProvider>
-    </DataSourceProvider>
+      </DataSourceProvider>
+    </ThemeProvider>
   );
 }
 

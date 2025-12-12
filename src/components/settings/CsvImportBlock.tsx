@@ -160,7 +160,7 @@ export default function CsvImportBlock() {
             Last import
           </div>
           <div style={{ fontSize: "14px", color: "#666", marginBottom: "4px" }}>
-            {new Date(lastImport.timestamp).toLocaleString()} → {lastImport.source} → {lastImport.filename}
+            {new Date(lastImport.timestamp).toLocaleString()} · {lastImport.source} · {lastImport.filename}
           </div>
           <div className="flex items-center gap-2">
             <div

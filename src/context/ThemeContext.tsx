@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, ReactNode } from "react";
 
-type Theme = "green" | "purple";
+type Theme = "green" | "red";
 
 interface ThemeContextType {
   theme: Theme;
@@ -22,8 +22,8 @@ const themes = {
     card: "#f2f2f7",
     accent: "#e5e5ea",
   },
-  purple: {
-    primary: "#a855f7",
+  red: {
+    primary: "#ef4444",
     secondary: "#f2f2f7",
     card: "#f2f2f7",
     accent: "#e5e5ea",
@@ -34,7 +34,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setTheme] = useState<Theme>("green");
 
   const toggleTheme = () => {
-    setTheme((prev) => (prev === "green" ? "purple" : "green"));
+    setTheme((prev) => (prev === "green" ? "red" : "green"));
   };
 
   return (
