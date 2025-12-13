@@ -13,10 +13,10 @@ const DataSourceContext = createContext<DataSourceContextValue | undefined>(unde
 
 const readInitialMode = (): DataSourceMode => {
   if (typeof window === "undefined") {
-    return "MOCK";
+    return "API"; // Changed from "MOCK" to "API"
   }
   const stored = window.localStorage.getItem(STORAGE_KEY);
-  return stored === "API" ? "API" : "MOCK";
+  return stored === "MOCK" ? "MOCK" : "API"; // Default to API if not explicitly set to MOCK
 };
 
 export function DataSourceProvider({ children }: { children: React.ReactNode }) {

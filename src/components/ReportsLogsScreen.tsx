@@ -1,5 +1,20 @@
 import { X, ChevronDown } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
+import { 
+  getLogs, 
+  LogEntry, 
+  LogsResponse, 
+  getGlobalConfig, 
+  GlobalConfigResponse,
+  getReportsSummary,
+  ReportsSummaryResponse,
+  ReportPeriod,
+  ReportSummaryCard,
+  ReportTopAsset,
+  ReportTopCampaign
+} from "../services/api";
+import { useDataSource } from "../context/DataSourceContext";
+import { formatLogTimestamp, formatUTC } from "../utils/dateFormatter";
 
 // Screen: ReportsLogsScreen (screen_id: "reports_logs")
 //
@@ -21,7 +36,7 @@ import { useState, useRef, useEffect } from "react";
 //
 // В текущем прототипе:
 // - все данные для Reports и Logs захардкожены (моки);
-// - этот файл описывает тол��ко структуру UI и поведение фильтров;
+// - этот файл описывает толко структуру UI и поведение фильтров;
 // - интеграция с реальным API будет добавлена поверх через хуки (useReportsSummary/useLogsFeed).
 
 interface ReportsLogsScreenProps {
@@ -31,25 +46,6 @@ interface ReportsLogsScreenProps {
 type Tab = 'reports' | 'logs';
 type LogLevel = 'all' | 'info' | 'warning' | 'error';
 type LogCategory = 'all' | 'system' | 'orders' | 'campaigns' | 'cron' | 'errors';
-
-// LogEntry:
-// - тип одной строки ленты логов в табе Logs;
-// - соответствует модели записи лога из GET /api/logs и GET /api/logs/{id}.
-// Поля:
-// - id         — уникальный идентификатор записи;
-// - timestamp  — время события (ISO/строка, форматируется на фронте);
-// - category   — домен события (system/orders/campaigns/cron/...);
-// - level      — уровень (info/warning/error);
-// - message    — короткое человекочитаемое описание;
-// - context    — произвольный объект с деталями (payload, параметры ордера, и т.д.).
-interface LogEntry {
-  id: string;
-  timestamp: string;
-  category: Exclude<LogCategory, 'all'>;
-  level: Exclude<LogLevel, 'all'>;
-  message: string;
-  context?: any;
-}
 
 // TODO API (Logs – mock data):
 // Сейчас MOCK_LOGS — это локальный массив для отрисовки таба Logs без бэкенда.
@@ -62,7 +58,7 @@ interface LogEntry {
 const MOCK_LOGS: LogEntry[] = [
   {
     id: '1',
-    timestamp: '2025-12-12 13:05',
+    timestamp: new Date(Date.now() - 10 * 60 * 1000).toISOString(), // 10 minutes ago
     category: 'orders',
     level: 'info',
     message: 'BTC buy order executed at 42150',
@@ -70,7 +66,7 @@ const MOCK_LOGS: LogEntry[] = [
   },
   {
     id: '2',
-    timestamp: '2025-12-12 12:45',
+    timestamp: new Date(Date.now() - 30 * 60 * 1000).toISOString(), // 30 minutes ago
     category: 'campaigns',
     level: 'warning',
     message: 'Campaign budget threshold reached (80%)',
@@ -78,7 +74,7 @@ const MOCK_LOGS: LogEntry[] = [
   },
   {
     id: '3',
-    timestamp: '2025-12-12 12:30',
+    timestamp: new Date(Date.now() - 45 * 60 * 1000).toISOString(), // 45 minutes ago
     category: 'system',
     level: 'error',
     message: 'Failed to connect to exchange API',
@@ -86,7 +82,7 @@ const MOCK_LOGS: LogEntry[] = [
   },
   {
     id: '4',
-    timestamp: '2025-12-12 12:15',
+    timestamp: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(), // 2 days ago
     category: 'cron',
     level: 'info',
     message: 'Metrics Snapshot job completed successfully',
@@ -95,6 +91,8 @@ const MOCK_LOGS: LogEntry[] = [
 ];
 
 export default function ReportsLogsScreen({ onClose }: ReportsLogsScreenProps) {
+  const { mode } = useDataSource();
+  
   // activeTab:
   // - переключает между табами:
   //     'reports' → таб Reports (работает с GET /api/reports/summary),
@@ -112,16 +110,161 @@ export default function ReportsLogsScreen({ onClose }: ReportsLogsScreenProps) {
   // - logCategory/logLevel — фильтры по категории и уровню для таба Logs;
   // - expandedLogId        — id раскрытой записи (для показа деталей);
   // - *_DropdownOpen       — локальное состояние дропдаунов фильтров.
-  // В текущей реализации фильтры применяются к MOCK_LOGS на фронте.
-  // После интеграции с API значения фильтров должны уходить в параметры GET /api/logs.
   const [logCategory, setLogCategory] = useState<LogCategory>('all');
   const [logLevel, setLogLevel] = useState<LogLevel>('all');
   const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
   const [categoryDropdownOpen, setCategoryDropdownOpen] = useState(false);
   const [levelDropdownOpen, setLevelDropdownOpen] = useState(false);
   
+  // API state for logs
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [isLoadingLogs, setIsLoadingLogs] = useState(false);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  
+  // Global config for auto-refresh
+  const [globalConfig, setGlobalConfig] = useState<GlobalConfigResponse>({});
+  
+  // API state for reports
+  const [selectedPeriod, setSelectedPeriod] = useState<ReportPeriod>('30d');
+  const [reportsData, setReportsData] = useState<ReportsSummaryResponse | null>(null);
+  const [isLoadingReports, setIsLoadingReports] = useState(false);
+  
   const categoryRef = useRef<HTMLDivElement>(null);
   const levelRef = useRef<HTMLDivElement>(null);
+  const autoRefreshTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Load global config on mount
+  useEffect(() => {
+    const fetchConfig = async () => {
+      if (mode === 'API') {
+        try {
+          const config = await getGlobalConfig();
+          setGlobalConfig(config);
+        } catch (error) {
+          console.error('Failed to load global config:', error);
+        }
+      }
+    };
+    fetchConfig();
+  }, [mode]);
+
+  // Parse auto-refresh interval from config
+  const getRefreshInterval = (): number | null => {
+    if (!globalConfig.auto_refresh || globalConfig.auto_refresh === 'Off') {
+      return null;
+    }
+
+    const value = globalConfig.auto_refresh;
+    
+    // Parse "5 seconds", "15 seconds", etc.
+    if (typeof value === 'string') {
+      const match = value.match(/(\d+)\s*second/i);
+      if (match) {
+        const seconds = parseInt(match[1]);
+        // Minimum 30 seconds for Logs (requirement)
+        return Math.max(seconds * 1000, 30000);
+      }
+    }
+    
+    // If numeric, treat as seconds
+    if (typeof value === 'number') {
+      // Minimum 30 seconds for Logs (requirement)
+      return Math.max(value * 1000, 30000);
+    }
+    
+    return null;
+  };
+
+  // Load logs from API or MOCK
+  const loadLogs = async (options?: { append?: boolean; cursor?: string }) => {
+    if (mode === 'MOCK') {
+      // MOCK mode: use mock data
+      setLogs(MOCK_LOGS);
+      setNextCursor(null);
+      setHasMore(false);
+      return;
+    }
+
+    // API mode: fetch from API
+    setIsLoadingLogs(true);
+    try {
+      const response = await getLogs({
+        category: logCategory !== 'all' ? logCategory : undefined,
+        level: logLevel !== 'all' ? logLevel : undefined,
+        limit: 50,
+        cursor: options?.cursor,
+      });
+
+      if (options?.append) {
+        setLogs((prev) => [...prev, ...response.items]);
+      } else {
+        setLogs(response.items);
+      }
+
+      setNextCursor(response.next_cursor);
+      setHasMore(response.has_more);
+    } catch (error) {
+      console.error('Failed to load logs:', error);
+      setLogs([]);
+      setNextCursor(null);
+      setHasMore(false);
+    } finally {
+      setIsLoadingLogs(false);
+    }
+  };
+
+  // Load logs when tab opens or filters change
+  useEffect(() => {
+    if (activeTab === 'logs') {
+      loadLogs();
+    }
+  }, [activeTab, logCategory, logLevel, mode]);
+
+  // Load more logs (pagination)
+  const loadMore = () => {
+    if (hasMore && nextCursor && !isLoadingLogs) {
+      loadLogs({ append: true, cursor: nextCursor });
+    }
+  };
+
+  // Force refresh logs
+  const refreshLogs = () => {
+    loadLogs();
+  };
+
+  // Load reports from API or MOCK
+  const loadReports = async () => {
+    if (mode === 'MOCK') {
+      // MOCK mode: don't fetch, use hardcoded UI
+      setReportsData(null);
+      return;
+    }
+
+    // API mode: fetch from API
+    setIsLoadingReports(true);
+    try {
+      const response = await getReportsSummary(selectedPeriod);
+      setReportsData(response);
+    } catch (error) {
+      console.error('Failed to load reports:', error);
+      setReportsData(null);
+    } finally {
+      setIsLoadingReports(false);
+    }
+  };
+
+  // Load reports when tab opens or period changes
+  useEffect(() => {
+    if (activeTab === 'reports') {
+      loadReports();
+    }
+  }, [activeTab, selectedPeriod, mode]);
+
+  // Force refresh reports
+  const refreshReports = () => {
+    loadReports();
+  };
 
   // UI-only logic: закрытие дропдаунов фильтров по клику вне компонентов.
   // На API не влияет, используется только для UX таба Logs.
@@ -139,21 +282,26 @@ export default function ReportsLogsScreen({ onClose }: ReportsLogsScreenProps) {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // TODO API (Logs – фильтры):
-  // Сейчас фильтрация по категории/уровню выполняется только на фронте
-  // поверх MOCK_LOGS. После подключения API логика должна быть такой:
-  //
-  // - при изменении logCategory/logLevel:
-  //     * триггерить загрузку логов из GET /api/logs
-  //       с параметрами ?category=&level=&search=...
-  //     * сервер возвращает уже отфильтрованный список LogEntry;
-  // - filteredLogs будет формироваться из данных, полученных с бэкенда;
-  // - MOCK_LOGS уйдёт из кода.
-  const filteredLogs = MOCK_LOGS.filter(log => {
-    if (logCategory !== 'all' && log.category !== logCategory) return false;
-    if (logLevel !== 'all' && log.level !== logLevel) return false;
-    return true;
-  });
+  // Auto-refresh logs based on global config
+  useEffect(() => {
+    const interval = getRefreshInterval();
+    if (interval && activeTab === 'logs') {
+      const timer = setInterval(refreshLogs, interval);
+      autoRefreshTimerRef.current = timer;
+    } else {
+      if (autoRefreshTimerRef.current) {
+        clearInterval(autoRefreshTimerRef.current);
+        autoRefreshTimerRef.current = null;
+      }
+    }
+
+    return () => {
+      if (autoRefreshTimerRef.current) {
+        clearInterval(autoRefreshTimerRef.current);
+        autoRefreshTimerRef.current = null;
+      }
+    };
+  }, [activeTab, logCategory, logLevel, mode, globalConfig]);
 
   return (
     <div className="fixed inset-0 z-50 h-full w-full bg-black overflow-hidden">
@@ -220,34 +368,116 @@ export default function ReportsLogsScreen({ onClose }: ReportsLogsScreenProps) {
       {/* Content */}
       <div className="h-full overflow-y-auto pb-48" data-scrollable="true">
         {activeTab === 'reports' ? (
-          <div className="px-6 pt-4 space-y-4">
-            {/* Portfolio Summary */}
-            <PortfolioSummaryCard />
-            
-            {/* Top Movers */}
-            <TopMoversCard />
-            
-            {/* PnL over time */}
-            <PnLOverTimeCard 
-              selectedRange={selectedRange}
-              onRangeChange={setSelectedRange}
-            />
-            
-            {/* Asset Allocation */}
-            <AssetAllocationCard />
-            
-            {/* Crypto vs Stocks */}
-            <CryptoVsStocksCard />
+          <div className="px-6 pt-4">
+            {/* Period Selector + Update Button */}
+            <div className="flex items-center justify-between mb-4">
+              {/* Period Selector */}
+              <div className="flex gap-2">
+                {([
+                  { key: 'today' as ReportPeriod, label: 'Today' },
+                  { key: '7d' as ReportPeriod, label: '7d' },
+                  { key: '30d' as ReportPeriod, label: '30d' },
+                  { key: 'ytd' as ReportPeriod, label: 'YTD' },
+                  { key: 'all' as ReportPeriod, label: 'All time' },
+                ]).map((period) => (
+                  <button
+                    key={period.key}
+                    onClick={() => setSelectedPeriod(period.key)}
+                    className="px-4 py-2 rounded-xl transition-colors"
+                    style={{
+                      fontSize: '14px',
+                      fontWeight: 'bold',
+                      backgroundColor: selectedPeriod === period.key ? '#10b981' : '#f3f4f6',
+                      color: selectedPeriod === period.key ? 'white' : '#6b7280',
+                    }}
+                    disabled={isLoadingReports}
+                  >
+                    {period.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Update Button (только в API mode) */}
+              {mode === 'API' && (
+                <button
+                  onClick={refreshReports}
+                  disabled={isLoadingReports}
+                  className="px-6 py-2 rounded-xl flex items-center justify-center transition-colors"
+                  style={{
+                    fontSize: '14px',
+                    fontWeight: 'bold',
+                    backgroundColor: isLoadingReports ? '#d1d5db' : '#10b981',
+                    color: 'white',
+                    cursor: isLoadingReports ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {isLoadingReports ? '...' : 'Update'}
+                </button>
+              )}
+            </div>
+
+            {/* Updated timestamp (только если есть данные из API) */}
+            {mode === 'API' && reportsData && reportsData.generated_at && (
+              <div className="mb-4 text-center" style={{ fontSize: '12px', color: '#999' }}>
+                Updated {formatLogTimestamp(reportsData.generated_at)}
+              </div>
+            )}
+
+            {/* Loading State */}
+            {isLoadingReports && !reportsData ? (
+              <div className="flex flex-col items-center justify-center pt-24">
+                <div className="text-6xl mb-4">⏳</div>
+                <div style={{ fontSize: '16px', color: '#777' }}>
+                  Loading reports...
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {/* Summary Cards (grid) */}
+                {mode === 'API' && reportsData ? (
+                  <SummaryCardsGrid cards={reportsData.summary_cards} />
+                ) : (
+                  /* MOCK mode - show placeholder */
+                  <PortfolioSummaryCard />
+                )}
+                
+                {/* Top Assets */}
+                {mode === 'API' && reportsData ? (
+                  <TopAssetsCard assets={reportsData.top_assets} />
+                ) : (
+                  /* MOCK mode - show placeholder */
+                  <TopMoversCard />
+                )}
+                
+                {/* Top Campaigns */}
+                {mode === 'API' && reportsData && reportsData.top_campaigns.length > 0 && (
+                  <TopCampaignsCard campaigns={reportsData.top_campaigns} />
+                )}
+                
+                {/* MOCK mode only cards */}
+                {mode === 'MOCK' && (
+                  <>
+                    <PnLOverTimeCard 
+                      selectedRange={selectedRange}
+                      onRangeChange={setSelectedRange}
+                    />
+                    <AssetAllocationCard />
+                    <CryptoVsStocksCard />
+                  </>
+                )}
+              </div>
+            )}
           </div>
         ) : (
           <div className="px-6 pt-4">
-            {/* Filters */}
+            {/* Filters + Update Button */}
             <div className="flex gap-3 mb-4">
               {/* Category Filter */}
               <div className="flex-1 relative" ref={categoryRef}>
                 <button
                   onClick={() => setCategoryDropdownOpen(!categoryDropdownOpen)}
                   className="w-full bg-white rounded-xl px-4 py-3 flex items-center justify-between border-2 border-gray-200 hover:border-gray-300 transition-colors"
+                  disabled={isLoadingLogs}
                 >
                   <span style={{ fontSize: '16px', color: 'black' }}>
                     {logCategory === 'all' ? 'All Categories' : logCategory.charAt(0).toUpperCase() + logCategory.slice(1)}
@@ -279,6 +509,7 @@ export default function ReportsLogsScreen({ onClose }: ReportsLogsScreenProps) {
                 <button
                   onClick={() => setLevelDropdownOpen(!levelDropdownOpen)}
                   className="w-full bg-white rounded-xl px-4 py-3 flex items-center justify-between border-2 border-gray-200 hover:border-gray-300 transition-colors"
+                  disabled={isLoadingLogs}
                 >
                   <span style={{ fontSize: '16px', color: 'black' }}>
                     {logLevel === 'all' ? 'All Levels' : logLevel.charAt(0).toUpperCase() + logLevel.slice(1)}
@@ -304,10 +535,37 @@ export default function ReportsLogsScreen({ onClose }: ReportsLogsScreenProps) {
                   </div>
                 )}
               </div>
+
+              {/* Update Button (только в API mode) */}
+              {mode === 'API' && (
+                <button
+                  onClick={refreshLogs}
+                  disabled={isLoadingLogs}
+                  className="px-6 py-3 rounded-xl flex items-center justify-center transition-colors"
+                  style={{
+                    fontSize: '16px',
+                    fontWeight: 'bold',
+                    backgroundColor: isLoadingLogs ? '#d1d5db' : '#10b981',
+                    color: 'white',
+                    cursor: isLoadingLogs ? 'not-allowed' : 'pointer',
+                    minWidth: '100px'
+                  }}
+                >
+                  {isLoadingLogs ? '...' : 'Update'}
+                </button>
+              )}
             </div>
 
-            {/* Logs List */}
-            {filteredLogs.length === 0 ? (
+            {/* Loading State */}
+            {isLoadingLogs && logs.length === 0 ? (
+              <div className="flex flex-col items-center justify-center pt-24">
+                <div className="text-6xl mb-4">⏳</div>
+                <div style={{ fontSize: '16px', color: '#777' }}>
+                  Loading logs...
+                </div>
+              </div>
+            ) : logs.length === 0 ? (
+              /* Empty State */
               <div className="flex flex-col items-center justify-center pt-24">
                 <div className="text-6xl mb-4">🗒️</div>
                 <div style={{ fontSize: '16px', color: '#777' }}>
@@ -315,16 +573,38 @@ export default function ReportsLogsScreen({ onClose }: ReportsLogsScreenProps) {
                 </div>
               </div>
             ) : (
-              <div className="space-y-4">
-                {filteredLogs.map((log) => (
-                  <LogCard
-                    key={log.id}
-                    log={log}
-                    isExpanded={expandedLogId === log.id}
-                    onToggle={() => setExpandedLogId(expandedLogId === log.id ? null : log.id)}
-                  />
-                ))}
-              </div>
+              /* Logs List */
+              <>
+                <div className="space-y-4">
+                  {logs.map((log) => (
+                    <LogCard
+                      key={log.id}
+                      log={log}
+                      isExpanded={expandedLogId === log.id}
+                      onToggle={() => setExpandedLogId(expandedLogId === log.id ? null : log.id)}
+                    />
+                  ))}
+                </div>
+
+                {/* Load More Button (pagination) */}
+                {hasMore && mode === 'API' && (
+                  <div className="mt-6 flex justify-center">
+                    <button
+                      onClick={loadMore}
+                      disabled={isLoadingLogs}
+                      className="px-6 py-3 rounded-xl border-2 border-gray-200 transition-colors hover:border-gray-300"
+                      style={{
+                        fontSize: '16px',
+                        fontWeight: 'bold',
+                        color: isLoadingLogs ? '#d1d5db' : '#333',
+                        cursor: isLoadingLogs ? 'not-allowed' : 'pointer'
+                      }}
+                    >
+                      {isLoadingLogs ? 'Loading...' : 'Load More'}
+                    </button>
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}
@@ -598,7 +878,7 @@ function LogCard({ log, isExpanded, onToggle }: {
         <div className="flex-1 min-w-0">
           <div className="flex items-start justify-between mb-1">
             <span style={{ fontSize: '14px', color: '#666' }}>
-              {log.timestamp}
+              {formatLogTimestamp(log.timestamp)}
             </span>
             <span 
               className="px-2 py-0.5 rounded text-xs"
@@ -616,18 +896,35 @@ function LogCard({ log, isExpanded, onToggle }: {
             {log.message}
           </div>
           
-          {isExpanded && log.context && (
-            <div 
-              className="mt-3 p-3 rounded-lg overflow-x-auto"
-              style={{ 
-                backgroundColor: '#f3f4f6',
-                fontSize: '12px',
-                fontFamily: 'monospace',
-                color: '#374151'
-              }}
-            >
-              <pre>{JSON.stringify(log.context, null, 2)}</pre>
-            </div>
+          {isExpanded && (
+            <>
+              {/* UTC Timestamp (in expanded state) */}
+              <div 
+                style={{ 
+                  fontSize: '12px', 
+                  color: '#999',
+                  marginTop: '8px',
+                  marginBottom: '8px'
+                }}
+              >
+                {formatUTC(log.timestamp)}
+              </div>
+
+              {/* Context Details */}
+              {log.context && (
+                <div 
+                  className="mt-3 p-3 rounded-lg overflow-x-auto"
+                  style={{ 
+                    backgroundColor: '#f3f4f6',
+                    fontSize: '12px',
+                    fontFamily: 'monospace',
+                    color: '#374151'
+                  }}
+                >
+                  <pre>{JSON.stringify(log.context, null, 2)}</pre>
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -681,5 +978,164 @@ function LargeSparkline() {
         vectorEffect="non-scaling-stroke"
       />
     </svg>
+  );
+}
+
+// Summary Cards Grid Component
+function SummaryCardsGrid({ cards }: { cards: ReportSummaryCard[] }) {
+  if (cards.length === 0) {
+    return (
+      <div className="bg-white rounded-3xl p-5 shadow-sm text-center" style={{ fontSize: '16px', color: '#999' }}>
+        No data for selected period
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid grid-cols-2 gap-4">
+      {cards.map((card) => {
+        const isPositive = card.trend === 'up';
+        const color = card.color === 'green' ? '#2ECC71' : card.color === 'red' ? '#E74C3C' : '#6b7280';
+        
+        return (
+          <div key={card.card_key} className="bg-white rounded-3xl p-5 shadow-sm">
+            <div style={{ fontSize: '14px', fontWeight: 'bold', color: '#666', marginBottom: '8px' }}>
+              {card.title}
+            </div>
+            <div className="flex items-center justify-between">
+              <div>
+                <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#000' }}>
+                  {card.value_formatted || card.value}
+                </div>
+                {card.delta_percent && (
+                  <div style={{ fontSize: '12px', color: color, marginTop: '4px' }}>
+                    {card.delta_percent}
+                  </div>
+                )}
+              </div>
+              {card.trend && (
+                <div className="w-16 h-12">
+                  <MiniSparkline positive={isPositive} />
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Top Assets Card Component
+function TopAssetsCard({ assets }: { assets: ReportTopAsset[] }) {
+  if (assets.length === 0) {
+    return (
+      <div className="bg-white rounded-3xl p-5 shadow-sm">
+        <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#333', marginBottom: '12px' }}>
+          Top Assets
+        </div>
+        <div className="text-center py-8" style={{ fontSize: '14px', color: '#999' }}>
+          No data for selected period
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-white rounded-3xl p-5 shadow-sm">
+      <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#333', marginBottom: '12px' }}>
+        Top Assets
+      </div>
+      <div className="space-y-2">
+        {assets.map((asset) => {
+          const isPositive = asset.pnl >= 0;
+          const color = isPositive ? '#2ECC71' : '#E74C3C';
+          
+          return (
+            <div key={asset.asset} className="flex items-center justify-between py-2">
+              <div style={{ fontSize: '16px', fontWeight: 'bold', flex: 1 }}>
+                {asset.asset}
+              </div>
+              <div 
+                style={{ 
+                  fontSize: '16px', 
+                  fontWeight: 'bold',
+                  color: color,
+                  flex: 1,
+                  textAlign: 'center'
+                }}
+              >
+                {asset.pnl_formatted || `${isPositive ? '+' : ''}${asset.pnl.toFixed(2)}`}
+              </div>
+              {asset.pnl_percent !== undefined && (
+                <div 
+                  style={{ 
+                    fontSize: '16px',
+                    color: color,
+                    flex: 1,
+                    textAlign: 'right'
+                  }}
+                >
+                  {asset.pnl_percent_formatted || `${isPositive ? '+' : ''}${asset.pnl_percent.toFixed(2)}%`}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// Top Campaigns Card Component
+function TopCampaignsCard({ campaigns }: { campaigns: ReportTopCampaign[] }) {
+  if (campaigns.length === 0) {
+    return null; // Don't show if empty
+  }
+
+  return (
+    <div className="bg-white rounded-3xl p-5 shadow-sm">
+      <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#333', marginBottom: '12px' }}>
+        Top Campaigns
+      </div>
+      <div className="space-y-2">
+        {campaigns.map((campaign) => {
+          const isPositive = campaign.pnl >= 0;
+          const color = isPositive ? '#2ECC71' : '#E74C3C';
+          const statusColor = campaign.status === 'active' ? '#10b981' : campaign.status === 'stopped' ? '#6b7280' : '#f59e0b';
+          
+          return (
+            <div key={campaign.campaign_id} className="flex items-center justify-between py-2">
+              <div className="flex flex-col flex-1">
+                <div style={{ fontSize: '16px', fontWeight: 'bold' }}>
+                  {campaign.campaign_name}
+                </div>
+                <div 
+                  className="px-2 py-0.5 rounded inline-block mt-1"
+                  style={{ 
+                    fontSize: '12px',
+                    backgroundColor: statusColor + '20',
+                    color: statusColor,
+                    width: 'fit-content'
+                  }}
+                >
+                  {campaign.status.charAt(0).toUpperCase() + campaign.status.slice(1)}
+                </div>
+              </div>
+              <div 
+                style={{ 
+                  fontSize: '16px', 
+                  fontWeight: 'bold',
+                  color: color,
+                  textAlign: 'right'
+                }}
+              >
+                {campaign.pnl_formatted || `${isPositive ? '+' : ''}${campaign.pnl.toFixed(2)}`}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }

@@ -1,9 +1,10 @@
 import { createContext, useContext, useState, ReactNode } from "react";
 
-type Theme = "green" | "red";
+export type Theme = "green" | "red";
 
 interface ThemeContextType {
   theme: Theme;
+  setTheme: (theme: Theme) => void;
   toggleTheme: () => void;
   colors: {
     primary: string;
@@ -41,6 +42,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     <ThemeContext.Provider
       value={{
         theme,
+        setTheme,
         toggleTheme,
         colors: themes[theme],
       }}

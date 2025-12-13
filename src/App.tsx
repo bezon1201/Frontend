@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence, PanInfo } from "motion/react";
 import { ThemeProvider } from "./context/ThemeContext";
 import { DataSourceProvider } from "./context/DataSourceContext";
+import { MessagesProvider } from "./context/MessagesContext";
 import FinanceScreen from "./components/FinanceScreen";
 import DashboardScreen from "./components/DashboardScreen";
 import OrdersScreen from "./components/OrdersScreen";
@@ -227,7 +228,9 @@ export default function App() {
   return (
     <ThemeProvider>
       <DataSourceProvider>
-        <AppContent />
+        <MessagesProvider>
+          <AppContent />
+        </MessagesProvider>
       </DataSourceProvider>
     </ThemeProvider>
   );

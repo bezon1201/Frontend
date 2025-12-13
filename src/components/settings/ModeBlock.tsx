@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner@2.0.3";
+import { resolveToastMessage } from "../../messages/messageResolver";
 import { useTheme } from "../../context/ThemeContext";
 import { useDataSource } from "../../context/DataSourceContext";
 import { getGlobalConfig, GlobalConfigResponse, healthCheck } from "../../services/api";
@@ -10,7 +11,7 @@ interface ModeBlockProps {
 
 export default function ModeBlock({ onConfigLoaded }: ModeBlockProps) {
   // Theme controls the visual indicator (green = API, red = MOCK)
-  const { theme, toggleTheme } = useTheme();
+  const { theme, setTheme } = useTheme();
   const { mode, setMode } = useDataSource();
   const [isCheckingApi, setIsCheckingApi] = useState(false);
 
@@ -51,7 +52,8 @@ export default function ModeBlock({ onConfigLoaded }: ModeBlockProps) {
     } catch {
       setMode("MOCK");
       if (showToastOnFailure) {
-        toast.error("API is not available - switched to MOCK");
+        const msg = resolveToastMessage("API_UNAVAILABLE");
+        toast.error(msg.title, { description: msg.description });
       }
       return false;
     } finally {
@@ -69,12 +71,12 @@ export default function ModeBlock({ onConfigLoaded }: ModeBlockProps) {
     if (isCurrentlyApi) {
       // Switching to MOCK (red)
       setMode("MOCK");
-      toggleTheme(); // API -> MOCK
+      setTheme("red");
     } else {
       // Switching to API (green)
       const success = await checkApiAndLoad(true);
       if (success) {
-        toggleTheme(); // MOCK -> API
+        setTheme("green");
       }
       // If failed, stays red (MOCK)
     }
@@ -83,10 +85,13 @@ export default function ModeBlock({ onConfigLoaded }: ModeBlockProps) {
   // On mount, check if mode is API and validate
   useEffect(() => {
     if (mode === "API") {
+      setTheme("green");
       void checkApiAndLoad(true);
+    } else {
+      setTheme("red");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [mode]);
 
   return (
     <div className="bg-white rounded-2xl p-6 mb-6">
